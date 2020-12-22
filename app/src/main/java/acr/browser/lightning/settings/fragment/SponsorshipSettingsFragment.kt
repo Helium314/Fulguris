@@ -40,7 +40,8 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(), PurchasesUpdated
     @UserPrefs
     internal lateinit var preferences: SharedPreferences
 
-    lateinit private var playStoreBillingClient: BillingClient
+    // Google Play Store billing client
+    private lateinit var playStoreBillingClient: BillingClient
 
 
     override fun providePreferencesXmlResource() = R.xml.preference_sponsorship
@@ -137,6 +138,13 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(), PurchasesUpdated
                     if (skuDetailsList.orEmpty().isNotEmpty()) {
                         skuDetailsList?.forEach {
                             Log.d(LOG_TAG, it.toString())
+
+                            val pref = SwitchPreferenceCompat(context)
+                            pref.title = it.title
+                            pref.summary = it.description
+                            pref.key = it.sku
+                            pref.isChecked = false
+                            preferenceScreen.addPreference(pref)
                         }
                     }
                 }
