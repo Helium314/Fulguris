@@ -397,4 +397,8 @@
     <string name="settings_app_prefix">app_for_</string>
     <string name="dialog_title_third_party_app">Third-party app available</string>
     <string name="dialog_message_third_party_app">Do you want to launch the application associated with that web site?</string>
+
+    <string name="per_month">\u0020/ month</string>
+    <string name="per_year">\u0020/ year</string>
+
 </resources>

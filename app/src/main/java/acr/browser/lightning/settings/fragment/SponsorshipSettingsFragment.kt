@@ -10,9 +10,12 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import androidx.core.content.res.ResourcesCompat
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 import com.android.billingclient.api.*
+// See: https://stackoverflow.com/a/54188472/3969362
+import org.threeten.bp.Period;
 import javax.inject.Inject
 
 /**
@@ -42,7 +45,6 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         super.onCreatePreferences(savedInstanceState, rootKey)
 
         injector.inject(this)
-
 
         // Connect our billing client
         context?.let {
@@ -185,7 +187,8 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                             Log.d(LOG_TAG, skuDetails.toString())
                             val pref = SwitchPreferenceCompat(context)
                             pref.title = skuDetails.title
-                            pref.summary = skuDetails.description
+                            pref.summary = skuDetails.price + formatPeriod(skuDetails.subscriptionPeriod) + "\n" + skuDetails.description
+                            pref.icon = ResourcesCompat.getDrawable(resources, R.drawable.ic_payment, activity?.theme)
                             // Check if that SKU is an active subscription
                             pref.isChecked = purchases.purchasesList?.firstOrNull { purchase -> purchase.sku == skuDetails.sku && purchase.isAcknowledged } != null
                             //
@@ -228,6 +231,24 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         }
     }
 
+
+    /**
+     * TODO: Improve that I guess
+     * Only support one year or one months
+     * Otherwise just return an empty string which should still format nicely
+     * It just won't specify the period but it is still visible in the payment workflow anyway
+     */
+    private fun formatPeriod(aPeriod : String) : String {
+        var period = Period.parse(aPeriod)
+        if (period.years == 1) {
+            return resources.getString(R.string.per_year)
+        }
+        if (period.months == 1) {
+            return resources.getString(R.string.per_month)
+        }
+
+        return ""
+    }
 
     /**
      * New purchases are coming in from here.
