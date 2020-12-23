@@ -1,5 +1,6 @@
 package acr.browser.lightning.settings.fragment
 
+import acr.browser.lightning.BuildConfig
 import acr.browser.lightning.R
 import acr.browser.lightning.Sponsorship
 import acr.browser.lightning.di.UserPrefs
@@ -7,10 +8,13 @@ import acr.browser.lightning.di.injector
 import acr.browser.lightning.preference.UserPreferences
 import acr.browser.lightning.utils.IntentUtils
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ResolveInfo
 import android.content.res.Resources
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -29,8 +33,7 @@ import javax.inject.Inject
  */
 class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         PurchasesUpdatedListener,
-        BillingClientStateListener,
-        SkuDetailsResponseListener {
+        BillingClientStateListener {
 
     //@Inject
     //internal lateinit var userPreferences: UserPreferences
@@ -58,14 +61,29 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
             playStoreBillingClient = BillingClient.newBuilder(it)
                 .enablePendingPurchases() // required or app will crash
                 .setListener(this).build()
+        }
+    }
+
+    /**
+     *
+     */
+    override fun onResume() {
+        super.onResume()
+        if (playStoreBillingClient.isReady) {
+            // Update our preference screen on resume.
+            // That should make sure newly bought stuff are showing after coming back from payment workflow.
+            populatePreferenceScreen()
+        } else {
             connectToPlayBillingService()
         }
     }
 
+    /**
+     *
+     */
     override fun onDestroy() {
         super.onDestroy()
         playStoreBillingClient.endConnection()
-
     }
 
     /**
@@ -90,7 +108,7 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                 Log.d(LOG_TAG, "onBillingSetupFinished successfully")
                 //querySkuDetailsAsync(BillingClient.SkuType.INAPP, GameSku.INAPP_SKUS)
                 // Ask client for list of available subscriptions
-                populateSubscriptions()
+                populatePreferenceScreen()
                 // Ask client for a list of purchase belonging to our customer
                 //queryPurchasesAsync()
             }
@@ -139,9 +157,12 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                                 billingResult -> Log.d(LOG_TAG, "onAcknowledgePurchaseResponse: $billingResult")
                                 when (billingResult.responseCode) {
                                     BillingClient.BillingResponseCode.OK -> {
-                                        // TODO: change our settings to unlock entitlement
                                         if (it.sku == SPONSOR_BRONZE) {
+                                            // Purchase acknowledgement was successful
+                                            // Update  sponsorship in our settings so that changes can take effect in the app
                                             userPreferences.sponsorship = Sponsorship.BRONZE
+                                            // Update our screen to reflect changes
+                                            populatePreferenceScreen()
                                         }
                                     }
                                 }
@@ -162,27 +183,48 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
 
     }
 
+    /**
+     * Populate preference screen with relevant SKUs.
+     * That can include in-apps and subscriptions.
+     */
+    private fun populatePreferenceScreen() {
+        // First remove all preferences
+        preferenceScreen.removeAll()
+        populateSubscriptions()
+    }
 
     /**
      * Query our billing client for known subscriptions, then check which ones are currently active
-     * to populate our screen.
+     * to populate our preference screen.
      */
     private fun populateSubscriptions() {
         if (!isSubscriptionSupported()) {
             return
         }
+        // Ask servers for our product list AKA SKUs
         val params = SkuDetailsParams.newBuilder().setSkusList(SUBS_SKUS).setType(BillingClient.SkuType.SUBS).build()
         playStoreBillingClient.querySkuDetailsAsync(params) { billingResult, skuDetailsList ->
-
             when (billingResult.responseCode) {
                 BillingClient.BillingResponseCode.OK -> {
                     Log.d(LOG_TAG, "populateSubscriptions OK")
-
                     if (skuDetailsList.orEmpty().isNotEmpty()) {
                         // We got a valid list of SKUs for our subscriptions
                         var purchases = playStoreBillingClient.queryPurchases(BillingClient.SkuType.SUBS)
-                        Log.d(LOG_TAG, "Purchases dump: ")
-                        purchases.purchasesList?.forEach {Log.d(LOG_TAG, it.toString())}
+                        //Log.d(LOG_TAG, "Purchases dump: ")
+                        if (purchases.purchasesList.isNullOrEmpty()) {
+                            // No valid subscriptions anymore, just downgrade then
+                            // We only do this here for now so unless user goes to Sponsorship activity after expiration she should still be able to use her expired subscriptions
+                            userPreferences.sponsorship = Sponsorship.TIN
+                        } else {
+                            purchases.purchasesList?.forEach {
+                                //Log.d(LOG_TAG, it.toString())
+                                // Take this opportunity to update our entitlements
+                                // That should fix things up for re-installations
+                                if (it.sku == SPONSOR_BRONZE && it.isAcknowledged) {
+                                    userPreferences.sponsorship = Sponsorship.BRONZE
+                                }
+                            }
+                        }
 
                         // TODO: do we need to check the result?
                         skuDetailsList?.forEach { skuDetails ->
@@ -190,17 +232,12 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                             val pref = SwitchPreferenceCompat(context)
                             pref.title = skuDetails.title
                             pref.summary = skuDetails.description
-                            //pref.key = skuDetails.sku
                             // Check if that SKU is an active subscription
-                            if (purchases.purchasesList.isNullOrEmpty()) {
-                                pref.isChecked = false
-                            }
-                            else {
-                                pref.isChecked = purchases.purchasesList?.firstOrNull { purchase -> purchase.sku == skuDetails.sku && purchase.isAcknowledged } != null
-                            }
-
+                            pref.isChecked = purchases.purchasesList?.firstOrNull { purchase -> purchase.sku == skuDetails.sku && purchase.isAcknowledged } != null
+                            //
                             pref.onPreferenceChangeListener = Preference.OnPreferenceChangeListener { _, newValue: Any ->
                                 if (newValue == true) {
+                                    // User is trying to buy that subscription
                                     // Launch subscription workflow
                                     val purchaseParams = BillingFlowParams.newBuilder().setSkuDetails(skuDetails).build()
                                     activity?.let {
@@ -209,7 +246,11 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                                         // https://developer.android.com/reference/com/android/billingclient/api/BillingClient#launchBillingFlow(android.app.Activity,%20com.android.billingclient.api.BillingFlowParams)
                                         // Purchase results are delivered in onPurchasesUpdated
                                     }
+                                } else {
+                                    // USer is trying to cancel subscription maybe
+                                    showPlayStoreSubscriptions(skuDetails.sku)
                                 }
+
 
                                 false
                             }
@@ -226,9 +267,17 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         }
     }
 
-    override fun onSkuDetailsResponse(p0: BillingResult, p1: MutableList<SkuDetails>?) {
-        TODO("Not yet implemented")
+    /**
+     * Open Play Store Subscriptions screen for our application
+     */
+    private fun showPlayStoreSubscriptions(aSku : String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/account/subscriptions?sku=$aSku&package=${BuildConfig.APPLICATION_ID}")))
+        } catch (e: ActivityNotFoundException) {
+            // Just ignore
+        }
     }
+
 
 
     /**
