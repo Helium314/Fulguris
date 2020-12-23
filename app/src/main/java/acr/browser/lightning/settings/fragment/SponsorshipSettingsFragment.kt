@@ -3,29 +3,16 @@ package acr.browser.lightning.settings.fragment
 import acr.browser.lightning.BuildConfig
 import acr.browser.lightning.R
 import acr.browser.lightning.Sponsorship
-import acr.browser.lightning.di.UserPrefs
 import acr.browser.lightning.di.injector
 import acr.browser.lightning.preference.UserPreferences
-import acr.browser.lightning.utils.IntentUtils
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.SharedPreferences
-import android.content.pm.ResolveInfo
-import android.content.res.Resources
-import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import androidx.annotation.RequiresApi
-import androidx.appcompat.content.res.AppCompatResources
-import androidx.core.graphics.drawable.DrawableCompat
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 import com.android.billingclient.api.*
-import kotlinx.coroutines.*
-import java.util.HashSet
 import javax.inject.Inject
 
 /**
@@ -55,6 +42,7 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         super.onCreatePreferences(savedInstanceState, rootKey)
 
         injector.inject(this)
+
 
         // Connect our billing client
         context?.let {
@@ -138,51 +126,6 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
         connectToPlayBillingService()
     }
 
-
-    /**
-     * New purchases are coming in from here.
-     * We need to acknowledge them.
-     */
-    override fun onPurchasesUpdated(billingResult: BillingResult, purchases: MutableList<Purchase>?) {
-        Log.d(LOG_TAG, "onPurchasesUpdated")
-        when (billingResult.responseCode) {
-            BillingClient.BillingResponseCode.OK -> {
-                purchases?.forEach {
-                    if (it.purchaseState == Purchase.PurchaseState.PURCHASED) {
-                        if (!it.isAcknowledged) {
-                            // Just acknowledge our purchase
-                            val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder().setPurchaseToken(it.purchaseToken).build()
-                            playStoreBillingClient.acknowledgePurchase(acknowledgePurchaseParams) {
-                                // TODO: Again what should we do with that?
-                                billingResult -> Log.d(LOG_TAG, "onAcknowledgePurchaseResponse: $billingResult")
-                                when (billingResult.responseCode) {
-                                    BillingClient.BillingResponseCode.OK -> {
-                                        if (it.sku == SPONSOR_BRONZE) {
-                                            // Purchase acknowledgement was successful
-                                            // Update  sponsorship in our settings so that changes can take effect in the app
-                                            userPreferences.sponsorship = Sponsorship.BRONZE
-                                            // Update our screen to reflect changes
-                                            populatePreferenceScreen()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
-            }
-            BillingClient.BillingResponseCode.SERVICE_DISCONNECTED -> {
-                connectToPlayBillingService()
-            }
-            else -> {
-                Log.i(LOG_TAG, billingResult.debugMessage)
-            }
-        }
-
-    }
-
     /**
      * Populate preference screen with relevant SKUs.
      * That can include in-apps and subscriptions.
@@ -199,6 +142,17 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
      */
     private fun populateSubscriptions() {
         if (!isSubscriptionSupported()) {
+            // Subscription is not supported meaning this probably is not a proper Google Play Store installation
+            // We invite user to installer our Google Play Store release
+            val pref = Preference(context)
+            pref.title = resources.getString(R.string.pref_title_no_sponsorship)
+            pref.summary = resources.getString(R.string.pref_summary_no_sponsorship)
+            pref.onPreferenceClickListener = Preference.OnPreferenceClickListener {
+                // Open up Fulguris play store page
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=net.slions.fulguris.full.playstore")))
+                true
+            }
+            preferenceScreen.addPreference(pref)
             return
         }
         // Ask servers for our product list AKA SKUs
@@ -250,12 +204,8 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                                     // USer is trying to cancel subscription maybe
                                     showPlayStoreSubscriptions(skuDetails.sku)
                                 }
-
-
                                 false
                             }
-
-
                             preferenceScreen.addPreference(pref)
                         }
                     }
@@ -279,55 +229,47 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
     }
 
 
-
     /**
-     * BACKGROUND
-     *
-     * Google Play Billing refers to receipts as [Purchases][Purchase]. So when a user buys
-     * something, Play Billing returns a [Purchase] object that the app then uses to release the
-     * [Entitlement] to the user. Receipts are pivotal within the [BillingRepository]; but they are
-     * not part of the repo’s public API, because clients don’t need to know about them. When
-     * the release of entitlements occurs depends on the type of purchase. For consumable products,
-     * the release may be deferred until after consumption by Google Play; for non-consumable
-     * products and subscriptions, the release may be deferred until after
-     * [BillingClient.acknowledgePurchaseAsync] is called. You should keep receipts in the local
-     * cache for augmented security and for making some transactions easier.
-     *
-     * THIS METHOD
-     *
-     * [This method][queryPurchasesAsync] grabs all the active purchases of this user and makes them
-     * available to this app instance. Whereas this method plays a central role in the billing
-     * system, it should be called at key junctures, such as when user the app starts.
-     *
-     * Because purchase data is vital to the rest of the app, this method is called each time
-     * the [BillingViewModel] successfully establishes connection with the Play [BillingClient]:
-     * the call comes through [onBillingSetupFinished]. Recall also from Figure 4 that this method
-     * gets called from inside [onPurchasesUpdated] in the event that a purchase is "already
-     * owned," which can happen if a user buys the item around the same time
-     * on a different device.
+     * New purchases are coming in from here.
+     * We need to acknowledge them.
      */
-    fun queryPurchasesAsync() {
-        Log.d(LOG_TAG, "queryPurchasesAsync called")
-        val purchasesResult = HashSet<Purchase>()
-        var result = playStoreBillingClient.queryPurchases(BillingClient.SkuType.INAPP)
-        Log.d(LOG_TAG, "queryPurchasesAsync INAPP results: ${result?.purchasesList?.size}")
-        result?.purchasesList?.apply { purchasesResult.addAll(this) }
-        if (isSubscriptionSupported()) {
-            result = playStoreBillingClient.queryPurchases(BillingClient.SkuType.SUBS)
-            result?.purchasesList?.apply { purchasesResult.addAll(this) }
-            Log.d(LOG_TAG, "queryPurchasesAsync SUBS results: ${result?.purchasesList?.size}")
+    override fun onPurchasesUpdated(billingResult: BillingResult, purchases: MutableList<Purchase>?) {
+        Log.d(LOG_TAG, "onPurchasesUpdated")
+        when (billingResult.responseCode) {
+            BillingClient.BillingResponseCode.OK -> {
+                purchases?.forEach {
+                    if (it.purchaseState == Purchase.PurchaseState.PURCHASED) {
+                        if (!it.isAcknowledged) {
+                            // Just acknowledge our purchase
+                            val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder().setPurchaseToken(it.purchaseToken).build()
+                            playStoreBillingClient.acknowledgePurchase(acknowledgePurchaseParams) {
+                                // TODO: Again what should we do with that?
+                                billingResult -> Log.d(LOG_TAG, "onAcknowledgePurchaseResponse: $billingResult")
+                                when (billingResult.responseCode) {
+                                    BillingClient.BillingResponseCode.OK -> {
+                                        if (it.sku == SPONSOR_BRONZE) {
+                                            // Purchase acknowledgement was successful
+                                            // Update  sponsorship in our settings so that changes can take effect in the app
+                                            userPreferences.sponsorship = Sponsorship.BRONZE
+                                            // Update our screen to reflect changes
+                                            populatePreferenceScreen()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
+            }
+            BillingClient.BillingResponseCode.SERVICE_DISCONNECTED -> {
+                connectToPlayBillingService()
+            }
+            else -> {
+                Log.i(LOG_TAG, billingResult.debugMessage)
+            }
         }
-        //processPurchases(purchasesResult)
-    }
-
-
-    fun queryCurrentSubscriptions() {
-        if (isSubscriptionSupported()) {
-            var result = playStoreBillingClient.queryPurchases(BillingClient.SkuType.SUBS)
-            //result?.purchasesList?.apply { purchasesResult.addAll(this) }
-            Log.d(LOG_TAG, "queryPurchasesAsync SUBS results: ${result?.purchasesList?.size}")
-        }
-        //processPurchases(purchasesResult)
     }
 
 
