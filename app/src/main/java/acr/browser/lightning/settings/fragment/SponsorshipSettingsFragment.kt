@@ -149,6 +149,7 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
             val pref = Preference(context)
             pref.title = resources.getString(R.string.pref_title_no_sponsorship)
             pref.summary = resources.getString(R.string.pref_summary_no_sponsorship)
+            pref.icon = ResourcesCompat.getDrawable(resources, R.drawable.ic_play_arrow, activity?.theme)
             pref.onPreferenceClickListener = Preference.OnPreferenceClickListener {
                 // Open up Fulguris play store page
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=net.slions.fulguris.full.playstore")))
@@ -212,6 +213,18 @@ class SponsorshipSettingsFragment : AbstractSettingsFragment(),
                             preferenceScreen.addPreference(pref)
                         }
                     }
+
+                    // Add preference with link to Fulguris download page
+                    val pref = Preference(context)
+                    pref.title = resources.getString(R.string.pref_title_free_download)
+                    pref.summary = resources.getString(R.string.pref_summary_free_download)
+                    pref.icon = ResourcesCompat.getDrawable(resources, R.drawable.ic_free_breakfast, activity?.theme)
+                    pref.onPreferenceClickListener = Preference.OnPreferenceClickListener {
+                        // Open Fulguris home page
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(resources.getString(R.string.url_app_home_page))))
+                        true
+                    }
+                    preferenceScreen.addPreference(pref)
                 }
                 else -> {
                     Log.e(LOG_TAG, billingResult.debugMessage)
